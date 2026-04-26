@@ -17,7 +17,7 @@ terraform {
   backend "s3" {
     bucket         = "kaushal-drift-tfstate"
     key            = "gitops-drift-demo/terraform.tfstate"
-    region         = "us-east-1"
+    region         = "ap-south-1"
     encrypt        = true
     dynamodb_table = "terraform-locks"
   }
@@ -42,7 +42,7 @@ provider "aws" {
 variable "aws_region" {
   description = "AWS region to deploy resources"
   type        = string
-  default     = "us-east-1"
+  default     = "ap-south-1"
 }
 
 variable "environment" {
@@ -283,7 +283,7 @@ resource "aws_iam_role" "drift_detector" {
           "token.actions.githubusercontent.com:aud" = "sts.amazonaws.com"
         }
         StringLike = {
-          "token.actions.githubusercontent.com:sub" = "repo:YOUR_ORG/YOUR_REPO:*"
+          "token.actions.githubusercontent.com:sub" = "repo:kaushal-gahlawat/gitops-drift-detector:*"
         }
       }
     }]
