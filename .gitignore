@@ -1,0 +1,13 @@
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.*
+crash.log
+
+# Drift output
+drift-report.json
+terraform/drift-report.json
+
+# OS files
+.DS_Store
+Thumbs.db

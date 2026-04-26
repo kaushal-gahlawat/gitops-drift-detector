@@ -637,27 +637,27 @@
   <div class="stats-grid">
     <div class="stat-card info">
       <div class="stat-label">Resources Checked</div>
-      <div class="stat-value counting" id="totalCount">24</div>
-      <div class="stat-sub">across us-east-1</div>
+      <div class="stat-value" id="totalCount">0</div>
+      <div class="stat-sub">across ap-south-1</div>
     </div>
     <div class="stat-card critical">
       <div class="stat-label">Critical Drift</div>
-      <div class="stat-value counting" id="critCount">2</div>
+      <div class="stat-value" id="critCount">0</div>
       <div class="stat-sub">require immediate action</div>
     </div>
     <div class="stat-card high">
       <div class="stat-label">High Severity</div>
-      <div class="stat-value counting" id="highCount">3</div>
+      <div class="stat-value" id="highCount">0</div>
       <div class="stat-sub">security-relevant changes</div>
     </div>
     <div class="stat-card medium">
       <div class="stat-label">Medium Severity</div>
-      <div class="stat-value counting" id="medCount">2</div>
+      <div class="stat-value" id="medCount">0</div>
       <div class="stat-sub">configuration drift</div>
     </div>
     <div class="stat-card clean">
       <div class="stat-label">Clean Resources</div>
-      <div class="stat-value counting" id="cleanCount">21</div>
+      <div class="stat-value" id="cleanCount">0</div>
       <div class="stat-sub">match Terraform state</div>
     </div>
   </div>
@@ -860,72 +860,121 @@
 </div>
 
 <script>
-// ── Drift data ─────────────────────────────────────────────────────────────
-const driftData = [
-  {
-    resource_type: 'aws_s3_bucket',
-    resource_id: 'drift-demo-assets-123456789',
-    attribute: 'block_public_acls',
-    expected: 'true',
-    actual: 'false',
-    severity: 'critical'
-  },
-  {
-    resource_type: 'aws_s3_bucket',
-    resource_id: 'drift-demo-assets-123456789',
-    attribute: 'encryption_enabled',
-    expected: 'true',
-    actual: 'false',
-    severity: 'critical'
-  },
-  {
-    resource_type: 'aws_security_group',
-    resource_id: 'sg-0abc123def456789',
-    attribute: 'ingress_rule_count',
-    expected: '2',
-    actual: '5',
-    severity: 'high'
-  },
-  {
-    resource_type: 'aws_security_group',
-    resource_id: 'sg-0abc123def456789',
-    attribute: 'egress_rule_count',
-    expected: '1',
-    actual: '3',
-    severity: 'high'
-  },
-  {
-    resource_type: 'aws_instance',
-    resource_id: 'i-0a1b2c3d4e5f67890',
-    attribute: 'instance_type',
-    expected: 't3.micro',
-    actual: 't3.medium',
-    severity: 'high'
-  },
-  {
-    resource_type: 'aws_instance',
-    resource_id: 'i-0a1b2c3d4e5f67890',
-    attribute: 'state',
-    expected: 'running',
-    actual: 'stopped',
-    severity: 'medium'
-  },
-  {
-    resource_type: 'aws_iam_role',
-    resource_id: 'drift-demo-app-role',
-    attribute: 'max_session_duration',
-    expected: '3600',
-    actual: '7200',
-    severity: 'medium'
-  }
-];
+// ── Load real drift-report.json, fall back to demo data ────────────────────
 
+const DEMO_DATA = {
+  scan_id: 'demo-mode',
+  timestamp: new Date().toISOString(),
+  aws_region: 'ap-south-1',
+  total_resources_checked: 0,
+  drifted_resources: 0,
+  drift_items: [],
+  errors: []
+};
+
+let driftData = [];
+let report = DEMO_DATA;
 let currentFilter = 'all';
 
-function renderTable(data) {
+async function loadReport() {
+  try {
+    const resp = await fetch('drift-report.json?_=' + Date.now());
+    if (!resp.ok) throw new Error('not found');
+    report = await resp.json();
+    driftData = report.drift_items || [];
+    applyReport();
+  } catch (e) {
+    // No real report found — show a clear notice and use empty state
+    document.getElementById('bannerTitle').textContent = 'No drift-report.json found — run the detector first';
+    document.getElementById('bannerSub').textContent =
+      'Run: python scripts/drift_detector.py — then refresh this page to see real AWS data.';
+    document.getElementById('statusBanner').className = 'status-banner banner-clean';
+    document.querySelector('.banner-icon').textContent = 'ℹ️';
+    applyReport();
+  }
+}
+
+function applyReport() {
+  const total   = report.total_resources_checked || 0;
+  const items   = report.drift_items || [];
+  const counts  = { critical: 0, high: 0, medium: 0, low: 0 };
+  items.forEach(d => { if (counts[d.severity] !== undefined) counts[d.severity]++; });
+  const clean   = Math.max(0, total - report.drifted_resources);
+  const region  = report.aws_region || 'ap-south-1';
+
+  // ── Stat cards ──────────────────────────────────────────────────────────
+  animateCount('totalCount', total);
+  animateCount('critCount',  counts.critical);
+  animateCount('highCount',  counts.high);
+  animateCount('medCount',   counts.medium);
+  animateCount('cleanCount', clean);
+
+  // Update "across region" label
+  document.querySelector('.stat-card.info .stat-sub').textContent = 'across ' + region;
+
+  // ── Banner ──────────────────────────────────────────────────────────────
+  const ts = report.timestamp ? new Date(report.timestamp) : new Date();
+  const ago = timeAgo(ts);
+  document.getElementById('lastScanTime').textContent = ago;
+  document.getElementById('scanId').textContent = 'Scan ID: #' + (report.scan_id || 'unknown');
+
+  if (items.length > 0) {
+    document.getElementById('statusBanner').className = 'status-banner banner-drift';
+    document.querySelector('.banner-icon').textContent = '🚨';
+    document.getElementById('bannerTitle').textContent =
+      `Config Drift Detected — ${report.drifted_resources} Resource(s) Affected`;
+    document.getElementById('bannerSub').textContent =
+      `${items.length} attribute(s) differ from Terraform state across ${region}. Check GitHub Issues for remediation steps.`;
+  } else if (total > 0) {
+    document.getElementById('statusBanner').className = 'status-banner banner-clean';
+    document.querySelector('.banner-icon').textContent = '✅';
+    document.getElementById('bannerTitle').textContent = 'All Clear — No Drift Detected';
+    document.getElementById('bannerSub').textContent =
+      `${total} resource(s) checked across ${region} — all match Terraform state.`;
+  }
+
+  // ── Drift count badge ────────────────────────────────────────────────────
+  document.getElementById('driftCount').textContent =
+    items.length > 0 ? `${items.length} drifted` : 'clean ✓';
+
+  // ── Scan messages (use real resource count) ──────────────────────────────
+  scanMessages[2] = `Extracting ${total} resource definitions…`;
+
+  // ── Table + donut ────────────────────────────────────────────────────────
+  renderTable();
+  updateDonut(counts, items.length);
+}
+
+// ── Animate a number counting up ────────────────────────────────────────────
+function animateCount(id, target) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  let current = 0;
+  const step = Math.max(1, Math.ceil(target / 24));
+  clearInterval(el._timer);
+  el._timer = setInterval(() => {
+    current = Math.min(current + step, target);
+    el.textContent = current;
+    if (current >= target) clearInterval(el._timer);
+  }, 40);
+}
+
+// ── Time ago helper ──────────────────────────────────────────────────────────
+function timeAgo(date) {
+  const diff = Math.floor((Date.now() - date.getTime()) / 1000);
+  if (diff < 60) return diff + ' seconds ago';
+  if (diff < 3600) return Math.floor(diff / 60) + ' minutes ago';
+  if (diff < 86400) return Math.floor(diff / 3600) + ' hours ago';
+  return Math.floor(diff / 86400) + ' days ago';
+}
+
+// ── Table render ─────────────────────────────────────────────────────────────
+function renderTable() {
   const tbody = document.getElementById('driftTableBody');
   const empty = document.getElementById('emptyState');
-  const filtered = currentFilter === 'all' ? data : data.filter(d => d.severity === currentFilter);
+  const filtered = currentFilter === 'all'
+    ? driftData
+    : driftData.filter(d => d.severity === currentFilter);
 
   if (filtered.length === 0) {
     tbody.innerHTML = '';
@@ -959,14 +1008,49 @@ function filterDrift(sev, btn) {
   currentFilter = sev;
   document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
   btn.classList.add('active');
-  renderTable(driftData);
+  renderTable();
 }
 
-// ── Scan animation ──────────────────────────────────────────────────────────
+// ── Donut chart ──────────────────────────────────────────────────────────────
+function updateDonut(counts, total) {
+  if (!counts) {
+    counts = { critical: 0, high: 0, medium: 0, low: 0 };
+    driftData.forEach(d => { if (counts[d.severity] !== undefined) counts[d.severity]++; });
+    total = driftData.length;
+  }
+  const circ = 2 * Math.PI * 56;
+
+  if (total === 0) {
+    ['Critical','High','Medium','Low'].forEach(s => {
+      const arc = document.getElementById('arc' + s);
+      if (arc) { arc.setAttribute('stroke-dasharray', `0 ${circ}`); arc.setAttribute('stroke-dashoffset', '0'); }
+      const leg = document.getElementById('leg-' + s.toLowerCase());
+      if (leg) leg.textContent = '0';
+    });
+    document.getElementById('donutNum').textContent = '0';
+    return;
+  }
+
+  const order = ['critical','high','medium','low'];
+  let offset = 0;
+  order.forEach(sev => {
+    const arc = document.getElementById('arc' + sev.charAt(0).toUpperCase() + sev.slice(1));
+    if (!arc) return;
+    const len = (counts[sev] / total) * circ;
+    arc.setAttribute('stroke-dasharray', `${len} ${circ}`);
+    arc.setAttribute('stroke-dashoffset', -offset);
+    offset += len;
+    const leg = document.getElementById('leg-' + sev);
+    if (leg) leg.textContent = counts[sev];
+  });
+  document.getElementById('donutNum').textContent = total;
+}
+
+// ── Scan animation ────────────────────────────────────────────────────────────
 const scanMessages = [
   'Authenticating with AWS via OIDC…',
   'Loading Terraform state from S3…',
-  'Extracting 24 resource definitions…',
+  'Extracting resource definitions…',
   'Querying EC2 instances…',
   'Checking security groups…',
   'Inspecting S3 bucket policies…',
@@ -980,11 +1064,11 @@ const scanMessages = [
 ];
 
 function startScan() {
-  const overlay = document.getElementById('scanOverlay');
+  const overlay  = document.getElementById('scanOverlay');
   const progress = document.getElementById('scanProgress');
-  const pct = document.getElementById('scanPct');
-  const status = document.getElementById('scanStatus');
-  const btn = document.getElementById('scanBtn');
+  const pct      = document.getElementById('scanPct');
+  const status   = document.getElementById('scanStatus');
+  const btn      = document.getElementById('scanBtn');
 
   overlay.classList.add('active');
   btn.classList.add('scanning');
@@ -995,11 +1079,12 @@ function startScan() {
 
   const tick = () => {
     if (step >= total) {
-      setTimeout(() => {
+      setTimeout(async () => {
         overlay.classList.remove('active');
         btn.classList.remove('scanning');
         btn.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg> Run Scan Now`;
-        updateLastScan();
+        // Reload the report after scan animation completes
+        await loadReport();
       }, 500);
       return;
     }
@@ -1013,47 +1098,11 @@ function startScan() {
   tick();
 }
 
-function updateLastScan() {
-  document.getElementById('lastScanTime').textContent = 'just now';
-  document.getElementById('scanId').textContent = 'Scan ID: #' + Math.random().toString(16).slice(2,10);
-}
+// ── Init: load real data on page open ────────────────────────────────────────
+loadReport();
 
-// ── Donut chart update ──────────────────────────────────────────────────────
-function updateDonut() {
-  const counts = { critical: 0, high: 0, medium: 0, low: 0 };
-  driftData.forEach(d => counts[d.severity]++);
-  const total = driftData.length;
-  const circ = 2 * Math.PI * 56; // 351.86
-
-  const colors = ['critical','high','medium','low'];
-  let offset = 0;
-  colors.forEach(sev => {
-    const arc = document.getElementById('arc' + sev.charAt(0).toUpperCase() + sev.slice(1));
-    if (!arc) return;
-    const len = (counts[sev] / total) * circ;
-    arc.setAttribute('stroke-dasharray', `${len} ${circ}`);
-    arc.setAttribute('stroke-dashoffset', -offset);
-    offset += len;
-    document.getElementById('leg-' + sev).textContent = counts[sev];
-  });
-  document.getElementById('donutNum').textContent = total;
-}
-
-// ── Init ────────────────────────────────────────────────────────────────────
-renderTable(driftData);
-updateDonut();
-
-// Animate numbers
-document.querySelectorAll('.counting').forEach(el => {
-  const target = parseInt(el.textContent);
-  let current = 0;
-  const step = Math.ceil(target / 20);
-  const timer = setInterval(() => {
-    current = Math.min(current + step, target);
-    el.textContent = current;
-    if (current >= target) clearInterval(timer);
-  }, 40);
-});
+// Auto-refresh every 60 seconds to pick up new scan results
+setInterval(loadReport, 60000);
 </script>
 </body>
 </html>

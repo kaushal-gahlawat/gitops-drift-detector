@@ -158,7 +158,7 @@ resource "aws_instance" "app" {
 
   root_block_device {
     volume_type           = "gp3"
-    volume_size           = 20
+    volume_size           = 30
     encrypted             = true
     delete_on_termination = true
   }
@@ -283,7 +283,7 @@ resource "aws_iam_role" "drift_detector" {
           "token.actions.githubusercontent.com:aud" = "sts.amazonaws.com"
         }
         StringLike = {
-          "token.actions.githubusercontent.com:sub" = "repo:kaushal-gahlawat/gitops-drift-detector:*"
+          "token.actions.githubusercontent.com:sub" = "repo:/kaushal-gahlawat/gitops-drift-detector:*"
         }
       }
     }]

@@ -101,10 +101,14 @@ class TerraformStateReader:
         return json.loads(obj["Body"].read())
 
     def _load_via_cli(self) -> dict:
-        log.info("Pulling Terraform state via CLI (`terraform show -json`)")
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        project_root = os.path.dirname(script_dir)
+        tf_dir = os.environ.get("TF_DIR", os.path.join(project_root, "terraform"))
+        log.info("Pulling Terraform state via CLI from folder: %s", tf_dir)
         result = subprocess.run(
             ["terraform", "show", "-json"],
             capture_output=True, text=True, check=True,
+            cwd=tf_dir,
         )
         return json.loads(result.stdout)
 
@@ -511,7 +515,10 @@ def run():
     tf_state_path = os.environ.get("TF_STATE_PATH", "")
     tf_s3_bucket = os.environ.get("TF_STATE_S3_BUCKET", "")
     tf_s3_key = os.environ.get("TF_STATE_S3_KEY", "terraform.tfstate")
-    output_path = os.environ.get("DRIFT_REPORT_PATH", "drift-report.json")
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    project_root = os.path.dirname(script_dir)
+    default_report = os.path.join(project_root, "dashboard", "drift-report.json")
+    output_path = os.environ.get("DRIFT_REPORT_PATH", default_report)
 
     scan_id = hashlib.sha1(
         f"{datetime.now(timezone.utc).isoformat()}".encode()
