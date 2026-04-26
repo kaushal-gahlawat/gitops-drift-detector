@@ -1,21 +1,15 @@
 name: 🔍 GitOps Config Drift Detector
 
 on:
-  # Run every 6 hours
   schedule:
     - cron: "0 */6 * * *"
 
-  # Allow manual trigger with optional region override
   workflow_dispatch:
     inputs:
       aws_region:
         description: "AWS Region to scan"
         required: false
-        default: "us-east-1"
-      terraform_workspace:
-        description: "Terraform workspace (default = default)"
-        required: false
-        default: "default"
+        default: "ap-south-1"
       fail_on_drift:
         description: "Fail the pipeline if drift is detected?"
         required: false
@@ -25,55 +19,42 @@ on:
           - "true"
           - "false"
 
-  # Also trigger on Terraform state file pushes (detect drift introduced by state updates)
   push:
     paths:
-      - "terraform/**/*.tfstate"
       - "terraform/**/*.tf"
 
 permissions:
   contents: read
-  issues: write          # Allow creating / updating GitHub issues
-  id-token: write        # For OIDC-based AWS auth
+  issues: write
 
 concurrency:
   group: drift-detector
-  cancel-in-progress: false   # Never cancel mid-scan
+  cancel-in-progress: false
 
 jobs:
-  # ────────────────────────────────────────────────────────────────────────────
   detect-drift:
     name: Detect Infrastructure Drift
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
     env:
-      AWS_REGION: ${{ github.event.inputs.aws_region || 'us-east-1' }}
+      AWS_REGION: ${{ github.event.inputs.aws_region || 'ap-south-1' }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       GITHUB_REPOSITORY: ${{ github.repository }}
       TF_STATE_S3_BUCKET: ${{ secrets.TF_STATE_S3_BUCKET }}
       TF_STATE_S3_KEY: ${{ secrets.TF_STATE_S3_KEY || 'terraform.tfstate' }}
-      DRIFT_REPORT_PATH: drift-report.json
+      DRIFT_REPORT_PATH: dashboard/drift-report.json
       PYTHONDONTWRITEBYTECODE: "1"
 
     steps:
-      # ── Checkout ────────────────────────────────────────────────────────────
       - name: 📥 Checkout repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
 
-      # ── AWS Auth (OIDC — no long-lived credentials stored in secrets) ────────
-      - name: 🔐 Configure AWS credentials (OIDC)
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          role-to-assume: ${{ secrets.AWS_DRIFT_DETECTOR_ROLE_ARN }}
-          role-session-name: GitOpsDriftDetector
-          aws-region: ${{ env.AWS_REGION }}
-          role-duration-seconds: 1800
-
-      # ── Terraform setup ──────────────────────────────────────────────────────
-      - name: 🏗️  Setup Terraform
+      - name: 🏗️ Setup Terraform
         uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: "~1.7"
@@ -87,9 +68,8 @@ jobs:
             -backend-config="key=$TF_STATE_S3_KEY" \
             -backend-config="region=$AWS_REGION" \
             -input=false
-        continue-on-error: true   # Don't block drift detection if init has minor issues
+        continue-on-error: true
 
-      # ── Python setup ─────────────────────────────────────────────────────────
       - name: 🐍 Set up Python
         uses: actions/setup-python@v5
         with:
@@ -99,31 +79,26 @@ jobs:
       - name: 📦 Install dependencies
         run: pip install -r scripts/requirements.txt
 
-      # ── Drift detection ──────────────────────────────────────────────────────
       - name: 🔍 Run drift detection
         id: drift
         run: python scripts/drift_detector.py
-        continue-on-error: true   # We handle exit codes ourselves below
+        continue-on-error: true
 
-      # ── Parse report for step summary ────────────────────────────────────────
       - name: 📊 Generate job summary
         if: always()
         run: |
           python - <<'EOF'
           import json, os, sys
-
-          path = os.environ.get("DRIFT_REPORT_PATH", "drift-report.json")
+          path = os.environ.get("DRIFT_REPORT_PATH", "dashboard/drift-report.json")
           try:
             with open(path) as f:
               report = json.load(f)
           except FileNotFoundError:
             print("No report file found.")
             sys.exit(0)
-
           drifted = report.get("drifted_resources", 0)
           total   = report.get("total_resources_checked", 0)
           items   = report.get("drift_items", [])
-
           summary = os.environ.get("GITHUB_STEP_SUMMARY", "/dev/stdout")
           with open(summary, "w") as f:
             if drifted == 0:
@@ -145,63 +120,16 @@ jobs:
                         f"{sev} {it['severity'].upper()} |\n")
           EOF
 
-      # ── Upload report artifact ────────────────────────────────────────────────
       - name: 📤 Upload drift report
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: drift-report-${{ github.run_number }}
-          path: drift-report.json
+          path: dashboard/drift-report.json
           retention-days: 90
 
-      # ── Notify Slack (optional) ───────────────────────────────────────────────
-      - name: 💬 Notify Slack (drift detected)
-        if: steps.drift.outcome == 'failure' && env.SLACK_WEBHOOK_URL != ''
-        env:
-          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
-        run: |
-          DRIFTED=$(python -c "import json; r=json.load(open('drift-report.json')); print(r['drifted_resources'])")
-          curl -s -X POST "$SLACK_WEBHOOK_URL" \
-            -H "Content-Type: application/json" \
-            -d "{\"text\":\"🚨 *Config Drift Detected!* ${DRIFTED} AWS resource(s) differ from Terraform state. See GitHub Issues for details.\"}"
-
-      # ── Fail the job if drift was found and fail_on_drift=true (default) ─────
       - name: ❌ Fail if drift detected
         if: steps.drift.outcome == 'failure' && (github.event.inputs.fail_on_drift != 'false')
         run: |
           echo "Drift was detected. Marking pipeline as failed."
           exit 1
-
-  # ────────────────────────────────────────────────────────────────────────────
-  # Optional second job: run Ansible remediation playbook on approval
-  remediate:
-    name: Remediate Drift (Manual Approval)
-    needs: detect-drift
-    if: failure() && github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-latest
-    environment: production-remediation   # Requires manual reviewer approval in GitHub
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: 🔐 Configure AWS credentials (OIDC)
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          role-to-assume: ${{ secrets.AWS_DRIFT_DETECTOR_ROLE_ARN }}
-          aws-region: ${{ github.event.inputs.aws_region || 'us-east-1' }}
-
-      - name: 📥 Download drift report
-        uses: actions/download-artifact@v4
-        with:
-          name: drift-report-${{ github.run_number }}
-
-      - name: 🔧 Install Ansible
-        run: |
-          pip install ansible boto3 botocore
-
-      - name: 🔄 Run Remediation Playbook
-        run: |
-          ansible-playbook ansible/remediate_drift.yml \
-            -e "drift_report_path=drift-report.json" \
-            -e "aws_region=${{ github.event.inputs.aws_region || 'us-east-1' }}" \
-            -v

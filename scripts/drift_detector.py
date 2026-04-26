@@ -318,6 +318,19 @@ SEVERITY_OVERRIDES = {
 }
 
 
+def _normalize(val) -> str:
+    """Normalize a value for comparison — sorts JSON keys so order doesn't matter."""
+    if isinstance(val, str):
+        try:
+            parsed = json.loads(val)
+            return json.dumps(parsed, sort_keys=True)
+        except Exception:
+            pass
+    if isinstance(val, (dict, list)):
+        return json.dumps(val, sort_keys=True)
+    return str(val).lower().strip()
+
+
 def compare(resource_type: str, resource_id: str,
             desired: dict, actual: dict) -> list[DriftItem]:
     """Return a list of DriftItem for every attribute that differs."""
@@ -331,8 +344,8 @@ def compare(resource_type: str, resource_id: str,
         if key not in actual:
             continue
         live_val = actual[key]
-        # Normalize for comparison
-        if str(expected_val).lower() != str(live_val).lower():
+        # Normalize both sides — handles JSON key ordering differences
+        if _normalize(expected_val) != _normalize(live_val):
             severity = SEVERITY_OVERRIDES.get((resource_type, key), default_severity)
             drifts.append(DriftItem(
                 resource_type=resource_type,
@@ -509,7 +522,7 @@ def save_report(report: DriftReport, path: str = "drift-report.json"):
 # ──────────────────────────────────────────────────────────────────────────────
 
 def run():
-    region = os.environ.get("AWS_REGION", "us-east-1")
+    region = os.environ.get("AWS_REGION", "ap-south-1")
     gh_token = os.environ.get("GITHUB_TOKEN", "")
     gh_repo = os.environ.get("GITHUB_REPOSITORY", "")
     tf_state_path = os.environ.get("TF_STATE_PATH", "")
