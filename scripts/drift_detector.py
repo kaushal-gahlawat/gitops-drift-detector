@@ -157,6 +157,10 @@ class AWSStateReader:
             "aws_instance": self._fetch_ec2_instance,
             "aws_security_group": self._fetch_security_group,
             "aws_s3_bucket": self._fetch_s3_bucket,
+            # These are the SEPARATE resource types Terraform actually uses:
+            "aws_s3_bucket_public_access_block": self._fetch_s3_public_access_block,
+            "aws_s3_bucket_server_side_encryption_configuration": self._fetch_s3_encryption,
+            "aws_s3_bucket_versioning": self._fetch_s3_versioning,
             "aws_iam_role": self._fetch_iam_role,
             "aws_db_instance": self._fetch_rds_instance,
             "aws_lb": self._fetch_alb,
@@ -184,11 +188,11 @@ class AWSStateReader:
         return {
             "instance_type": inst.get("InstanceType"),
             "ami": inst.get("ImageId"),
-            "state": inst["State"]["Name"],
+            "instance_state": inst["State"]["Name"],   # matches TF field name
+            "monitoring": inst.get("Monitoring", {}).get("State") == "enabled",
             "subnet_id": inst.get("SubnetId"),
             "vpc_id": inst.get("VpcId"),
-            "key_name": inst.get("KeyName"),
-            "tags": tags,
+            "disable_api_termination": inst.get("StateReason", {}).get("Code") == "Client.UserInitiatedShutdown",
         }
 
     # ── Security Groups ───────────────────────────────────────────────────────
@@ -236,6 +240,61 @@ class AWSStateReader:
         except Exception:
             pass
         return result
+
+    def _fetch_s3_public_access_block(self, attrs: dict) -> dict | None:
+        """Fetcher for aws_s3_bucket_public_access_block resource."""
+        bucket = attrs.get("bucket") or attrs.get("id")
+        if not bucket:
+            return None
+        try:
+            resp = self.s3.get_public_access_block(Bucket=bucket)
+            cfg = resp["PublicAccessBlockConfiguration"]
+            return {
+                "block_public_acls":       cfg.get("BlockPublicAcls", False),
+                "block_public_policy":     cfg.get("BlockPublicPolicy", False),
+                "ignore_public_acls":      cfg.get("IgnorePublicAcls", False),
+                "restrict_public_buckets": cfg.get("RestrictPublicBuckets", False),
+            }
+        except Exception as exc:
+            log.warning("Could not fetch S3 public access block for %s: %s", bucket, exc)
+            return None
+
+    def _fetch_s3_encryption(self, attrs: dict) -> dict | None:
+        """Fetcher for aws_s3_bucket_server_side_encryption_configuration resource."""
+        bucket = attrs.get("bucket") or attrs.get("id")
+        if not bucket:
+            return None
+        try:
+            resp = self.s3.get_bucket_encryption(Bucket=bucket)
+            rules = resp["ServerSideEncryptionConfiguration"]["Rules"]
+            if not rules:
+                return {"encryption_enabled": False}
+            algo = rules[0].get("ApplyServerSideEncryptionByDefault", {}).get("SSEAlgorithm", "")
+            return {
+                "encryption_enabled": True,
+                # We only care if encryption disappeared — not which algo
+            }
+        except self.s3.exceptions.ClientError:
+            return {"encryption_enabled": False}
+        except Exception as exc:
+            log.warning("Could not fetch S3 encryption for %s: %s", bucket, exc)
+            return None
+
+    def _fetch_s3_versioning(self, attrs: dict) -> dict | None:
+        """Fetcher for aws_s3_bucket_versioning resource."""
+        bucket = attrs.get("bucket") or attrs.get("id")
+        if not bucket:
+            return None
+        try:
+            resp = self.s3.get_bucket_versioning(Bucket=bucket)
+            status = resp.get("Status", "")
+            # Terraform stores this as versioning_configuration[0].status
+            return {
+                "versioning_configuration": [{"status": status or "Disabled"}]
+            }
+        except Exception as exc:
+            log.warning("Could not fetch S3 versioning for %s: %s", bucket, exc)
+            return None
 
     # ── IAM ──────────────────────────────────────────────────────────────────
 
@@ -314,17 +373,33 @@ IGNORED_ATTRIBUTES = {
     "aws_s3_bucket": {"force_destroy", "lifecycle_rule", "tags", "tags_all"},
     "aws_iam_role":  {"tags", "tags_all", "inline_policy", "managed_policy_arns",
                       "role_last_used", "unique_id", "create_date"},
+    # These sub-resources only have a few meaningful fields — ignore bucket metadata
+    "aws_s3_bucket_public_access_block": {"id", "bucket"},
+    "aws_s3_bucket_server_side_encryption_configuration": {"id", "bucket", "expected_bucket_owner", "rule"},
+    "aws_s3_bucket_versioning": {"id", "bucket", "expected_bucket_owner", "mfa"},
 }
 
 SEVERITY_OVERRIDES = {
-    ("aws_instance", "state"): "critical",
-    ("aws_s3_bucket", "block_public_acls"): "critical",
-    ("aws_s3_bucket", "block_public_policy"): "critical",
-    ("aws_s3_bucket", "encryption_enabled"): "critical",
+    # EC2
+    ("aws_instance", "instance_state"): "critical",
+    ("aws_instance", "instance_type"):  "high",
+    # S3 public access block (separate TF resource)
+    ("aws_s3_bucket_public_access_block", "block_public_acls"):       "critical",
+    ("aws_s3_bucket_public_access_block", "block_public_policy"):     "critical",
+    ("aws_s3_bucket_public_access_block", "ignore_public_acls"):      "critical",
+    ("aws_s3_bucket_public_access_block", "restrict_public_buckets"): "critical",
+    # S3 encryption (separate TF resource)
+    ("aws_s3_bucket_server_side_encryption_configuration", "encryption_enabled"): "critical",
+    # Legacy combined fetcher (kept for safety)
+    ("aws_s3_bucket", "block_public_acls"):   "critical",
+    ("aws_s3_bucket", "block_public_policy"):  "critical",
+    ("aws_s3_bucket", "encryption_enabled"):   "critical",
+    # IAM
     ("aws_iam_role", "assume_role_policy"): "critical",
+    # RDS
     ("aws_db_instance", "publicly_accessible"): "critical",
-    ("aws_db_instance", "deletion_protection"): "high",
-    ("aws_db_instance", "storage_encrypted"): "critical",
+    ("aws_db_instance", "deletion_protection"):  "high",
+    ("aws_db_instance", "storage_encrypted"):    "critical",
 }
 
 
