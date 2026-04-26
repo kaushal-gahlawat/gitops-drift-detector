@@ -528,6 +528,44 @@ def save_report(report: DriftReport, path: str = "drift-report.json"):
 
 
 # ──────────────────────────────────────────────────────────────────────────────
+# Scan History Writer
+# ──────────────────────────────────────────────────────────────────────────────
+
+def append_scan_history(report: DriftReport, issue_url: str = "", history_path: str = ""):
+    """Append this scan result to scan-history.json (kept in dashboard/)."""
+    if not history_path:
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        project_root = os.path.dirname(script_dir)
+        history_path = os.path.join(project_root, "dashboard", "scan-history.json")
+
+    # Load existing history
+    history = []
+    try:
+        with open(history_path) as f:
+            history = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        pass
+
+    # Prepend new entry (newest first)
+    entry = {
+        "scan_id": report.scan_id,
+        "timestamp": report.timestamp,
+        "aws_region": report.aws_region,
+        "total_resources_checked": report.total_resources_checked,
+        "drifted": len(report.drift_items),   # -1 = error, 0 = clean, >0 = drift count
+        "issue_url": issue_url,
+    }
+    history.insert(0, entry)
+
+    # Keep only the last 50 scans
+    history = history[:50]
+
+    with open(history_path, "w") as f:
+        json.dump(history, f, indent=2, default=str)
+    log.info("Scan history updated: %s", history_path)
+
+
+# ──────────────────────────────────────────────────────────────────────────────
 # Main Orchestrator
 # ──────────────────────────────────────────────────────────────────────────────
 
@@ -595,18 +633,22 @@ def run():
     save_report(report, output_path)
 
     # ── 4. Create / update / close GitHub issue ───────────────────────────────
+    issue_url = ""
     if gh_token and gh_repo:
         gh = GitHubIssueCreator(token=gh_token, repo=gh_repo)
         if report.has_drift:
-            url = gh.create_or_update(report)
-            log.info("GitHub issue: %s", url)
+            issue_url = gh.create_or_update(report)
+            log.info("GitHub issue: %s", issue_url)
         else:
             log.info("No drift detected — closing any open drift issues")
             gh.close_drift_issues()
     else:
         log.warning("GITHUB_TOKEN / GITHUB_REPOSITORY not set — skipping issue creation")
 
-    # ── 5. Exit code ──────────────────────────────────────────────────────────
+    # ── 5. Record scan in history ─────────────────────────────────────────────
+    append_scan_history(report, issue_url=issue_url if report.has_drift else "")
+
+    # ── 6. Exit code ──────────────────────────────────────────────────────────
     if report.has_drift:
         log.error(
             "Drift detected: %d resource(s), %d attribute(s)",
