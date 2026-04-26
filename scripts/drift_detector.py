@@ -302,8 +302,18 @@ class AWSStateReader:
 
 IGNORED_ATTRIBUTES = {
     "aws_instance": {"password_data", "user_data_base64", "cpu_core_count",
-                     "cpu_threads_per_core", "credit_specification"},
-    "aws_s3_bucket": {"force_destroy", "lifecycle_rule"},
+                     "cpu_threads_per_core", "credit_specification",
+                     "key_name",       # often null in TF but set in AWS — skip
+                     "tags",           # tag drift tracked separately if needed
+                     "tags_all",       # provider-merged tags — skip
+                     "private_ip", "public_ip", "public_dns", "private_dns",
+                     "primary_network_interface_id", "network_interface",
+                     "launch_template", "capacity_reservation_specification",
+                     "enclave_options", "maintenance_options",
+                     "private_dns_name_options"},
+    "aws_s3_bucket": {"force_destroy", "lifecycle_rule", "tags", "tags_all"},
+    "aws_iam_role":  {"tags", "tags_all", "inline_policy", "managed_policy_arns",
+                      "role_last_used", "unique_id", "create_date"},
 }
 
 SEVERITY_OVERRIDES = {
