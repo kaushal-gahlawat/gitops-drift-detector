@@ -22,6 +22,7 @@ on:
   push:
     paths:
       - "terraform/**/*.tf"
+      - "scripts/**/*.py"
 
 permissions:
   contents: read
@@ -44,15 +45,13 @@ jobs:
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       GITHUB_REPOSITORY: ${{ github.repository }}
       TF_STATE_S3_BUCKET: ${{ secrets.TF_STATE_S3_BUCKET }}
-      TF_STATE_S3_KEY: ${{ secrets.TF_STATE_S3_KEY || 'terraform.tfstate' }}
+      TF_STATE_S3_KEY: ${{ secrets.TF_STATE_S3_KEY || 'gitops-drift-demo/terraform.tfstate' }}
       DRIFT_REPORT_PATH: dashboard/drift-report.json
       PYTHONDONTWRITEBYTECODE: "1"
 
     steps:
       - name: 📥 Checkout repository
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 1
 
       - name: 🏗️ Setup Terraform
         uses: hashicorp/setup-terraform@v3
@@ -60,15 +59,17 @@ jobs:
           terraform_version: "~1.7"
           terraform_wrapper: false
 
-      - name: 🔄 Terraform Init
+      # ── Key fix: init only if S3 bucket secret is set ──────────────────────
+      - name: 🔄 Terraform Init (S3 backend)
+        if: ${{ env.TF_STATE_S3_BUCKET != '' }}
         working-directory: terraform
         run: |
           terraform init \
-            -backend-config="bucket=$TF_STATE_S3_BUCKET" \
-            -backend-config="key=$TF_STATE_S3_KEY" \
-            -backend-config="region=$AWS_REGION" \
-            -input=false
-        continue-on-error: true
+            -backend-config="bucket=${{ secrets.TF_STATE_S3_BUCKET }}" \
+            -backend-config="key=${{ secrets.TF_STATE_S3_KEY || 'gitops-drift-demo/terraform.tfstate' }}" \
+            -backend-config="region=${{ github.event.inputs.aws_region || 'ap-south-1' }}" \
+            -input=false -reconfigure
+        continue-on-error: false
 
       - name: 🐍 Set up Python
         uses: actions/setup-python@v5
@@ -82,6 +83,8 @@ jobs:
       - name: 🔍 Run drift detection
         id: drift
         run: python scripts/drift_detector.py
+        env:
+          TF_DIR: terraform
         continue-on-error: true
 
       - name: 📊 Generate job summary
@@ -109,14 +112,14 @@ jobs:
               f.write(f"| Stat | Value |\n|---|---|\n")
               f.write(f"| Resources Checked | {total} |\n")
               f.write(f"| Drifted Resources | {drifted} |\n")
-              f.write(f"| Total Attributes Drifted | {len(items)} |\n\n")
-              f.write("| Resource Type | ID | Attribute | Expected | Actual | Severity |\n")
+              f.write(f"| Total Drifted Attributes | {len(items)} |\n\n")
+              f.write("| Resource Type | Resource ID | Attribute | Expected | Actual | Severity |\n")
               f.write("|---|---|---|---|---|---|\n")
               sev_map = {"low":"🟢","medium":"🟡","high":"🟠","critical":"🔴"}
               for it in items:
                 sev = sev_map.get(it["severity"],"⚪")
                 f.write(f"| `{it['resource_type']}` | `{it['resource_id']}` | "
-                        f"`{it['attribute']}` | `{it['expected']}` | `{it['actual']}` | "
+                        f"`{it['attribute']}` | `{str(it['expected'])[:40]}` | `{str(it['actual'])[:40]}` | "
                         f"{sev} {it['severity'].upper()} |\n")
           EOF
 
@@ -126,10 +129,11 @@ jobs:
         with:
           name: drift-report-${{ github.run_number }}
           path: dashboard/drift-report.json
+          if-no-files-found: warn
           retention-days: 90
 
       - name: ❌ Fail if drift detected
-        if: steps.drift.outcome == 'failure' && (github.event.inputs.fail_on_drift != 'false')
+        if: steps.drift.outcome == 'failure' && github.event.inputs.fail_on_drift != 'false'
         run: |
-          echo "Drift was detected. Marking pipeline as failed."
+          echo "::error::Config drift detected. See job summary for details."
           exit 1

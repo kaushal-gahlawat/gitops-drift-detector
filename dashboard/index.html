@@ -609,7 +609,7 @@
         <div class="live-dot"></div>
         <span>Scheduled · Every 6h</span>
       </div>
-      <button class="scan-btn" id="scanBtn" onclick="startScan()">
+      <button class="scan-btn" id="scanBtn" onclick="triggerScan()">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
           <polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/>
         </svg>
@@ -825,6 +825,10 @@
 
 <script>
 // ── Load real drift-report.json, fall back to demo data ────────────────────
+
+// ── Set your GitHub repo here for the "Run Scan Now" button ──────────────────
+// e.g. window.GITHUB_REPO = 'kaushal-gahlawat/gitops-drift-detector'
+window.GITHUB_REPO = '';   // leave blank to use local scan animation
 
 const DEMO_DATA = {
   scan_id: 'demo-mode',
@@ -1088,6 +1092,18 @@ const scanMessages = [
   'Opening GitHub issue…',
   'Scan complete!'
 ];
+
+function triggerScan() {
+  // Try to open GitHub Actions manual trigger page
+  // Users can also just run: python scripts/drift_detector.py locally
+  const repoUrl = window.GITHUB_REPO || '';
+  if (repoUrl) {
+    window.open(`https://github.com/${repoUrl}/actions/workflows/drift-detection.yml`, '_blank');
+  } else {
+    // Fall back to showing instructions + run the animation as demo
+    startScan();
+  }
+}
 
 function startScan() {
   const overlay  = document.getElementById('scanOverlay');

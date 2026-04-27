@@ -187,12 +187,10 @@ class AWSStateReader:
         tags = {t["Key"]: t["Value"] for t in inst.get("Tags", [])}
         return {
             "instance_type": inst.get("InstanceType"),
-            "ami": inst.get("ImageId"),
             "instance_state": inst["State"]["Name"],   # matches TF field name
             "monitoring": inst.get("Monitoring", {}).get("State") == "enabled",
             "subnet_id": inst.get("SubnetId"),
             "vpc_id": inst.get("VpcId"),
-            "disable_api_termination": inst.get("StateReason", {}).get("Code") == "Client.UserInitiatedShutdown",
         }
 
     # ── Security Groups ───────────────────────────────────────────────────────
@@ -362,21 +360,44 @@ class AWSStateReader:
 IGNORED_ATTRIBUTES = {
     "aws_instance": {"password_data", "user_data_base64", "cpu_core_count",
                      "cpu_threads_per_core", "credit_specification",
-                     "key_name",       # often null in TF but set in AWS — skip
-                     "tags",           # tag drift tracked separately if needed
-                     "tags_all",       # provider-merged tags — skip
+                     "key_name", "tags", "tags_all",
                      "private_ip", "public_ip", "public_dns", "private_dns",
                      "primary_network_interface_id", "network_interface",
                      "launch_template", "capacity_reservation_specification",
                      "enclave_options", "maintenance_options",
-                     "private_dns_name_options"},
+                     "private_dns_name_options",
+                     # These change automatically when instance stops — not real drift
+                     "disable_api_termination", "disable_api_stop",
+                     "instance_initiated_shutdown_behavior",
+                     "associate_public_ip_address",
+                     "ebs_optimized", "hibernation",
+                     "spot_instance_request_id", "outpost_arn",
+                     "placement_group", "placement_partition_number",
+                     "host_id", "host_resource_group_arn",
+                     "ipv6_address_count", "ipv6_addresses",
+                     "secondary_private_ips", "security_groups",
+                     "volume_tags", "user_data_replace_on_change",
+                     "get_password_data", "ami",
+                     "arn", "availability_zone",
+                     "cpu_options", "ebs_block_device", "ephemeral_block_device",
+                     "instance_lifecycle", "instance_market_options",
+                     "metadata_options", "root_block_device",
+                     "source_dest_check", "tenancy",
+                     "vpc_security_group_ids"},
     "aws_s3_bucket": {"force_destroy", "lifecycle_rule", "tags", "tags_all"},
     "aws_iam_role":  {"tags", "tags_all", "inline_policy", "managed_policy_arns",
                       "role_last_used", "unique_id", "create_date"},
     # These sub-resources only have a few meaningful fields — ignore bucket metadata
     "aws_s3_bucket_public_access_block": {"id", "bucket"},
     "aws_s3_bucket_server_side_encryption_configuration": {"id", "bucket", "expected_bucket_owner", "rule"},
-    "aws_s3_bucket_versioning": {"id", "bucket", "expected_bucket_owner", "mfa"},
+    # versioning_configuration comparison handled separately — ignore the full nested object
+    # to avoid mfa_delete false positives; we check status only via _fetch_s3_versioning
+    "aws_s3_bucket_versioning": {"id", "bucket", "expected_bucket_owner", "mfa",
+                                  "versioning_configuration"},
+    "aws_iam_role_policy": {"id", "role", "policy", "name", "name_prefix"},
+    "aws_iam_instance_profile": {"id", "name", "role", "arn", "create_date",
+                                  "unique_id", "name_prefix", "path",
+                                  "tags", "tags_all"},
 }
 
 SEVERITY_OVERRIDES = {
