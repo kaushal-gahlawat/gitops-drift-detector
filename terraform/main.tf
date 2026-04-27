@@ -13,13 +13,12 @@ terraform {
     }
   }
 
-  # Remote state backend — replace with your bucket name
+  # Remote state backend
   backend "s3" {
-    bucket         = "kaushal-drift-tfstate"
-    key            = "gitops-drift-demo/terraform.tfstate"
-    region         = "ap-south-1"
-    encrypt        = true
-    dynamodb_table = "terraform-locks"
+    bucket  = "kaushal-drift-tfstate"
+    key     = "gitops-drift-demo/terraform.tfstate"
+    region  = "ap-south-1"
+    encrypt = true
   }
 }
 
@@ -158,7 +157,7 @@ resource "aws_instance" "app" {
 
   root_block_device {
     volume_type           = "gp3"
-    volume_size           = 30
+    volume_size           = 20
     encrypted             = true
     delete_on_termination = true
   }
@@ -283,7 +282,7 @@ resource "aws_iam_role" "drift_detector" {
           "token.actions.githubusercontent.com:aud" = "sts.amazonaws.com"
         }
         StringLike = {
-          "token.actions.githubusercontent.com:sub" = "repo:/kaushal-gahlawat/gitops-drift-detector:*"
+          "token.actions.githubusercontent.com:sub" = "repo:YOUR_ORG/YOUR_REPO:*"
         }
       }
     }]
@@ -346,7 +345,7 @@ resource "aws_iam_role_policy" "drift_detector" {
         Sid    = "TFStateRead"
         Effect = "Allow"
         Action = ["s3:GetObject"]
-        Resource = "arn:aws:s3:::your-tf-state-bucket/*"
+        Resource = "arn:aws:s3:::kaushal-drift-tfstate/*"
       }
     ]
   })
