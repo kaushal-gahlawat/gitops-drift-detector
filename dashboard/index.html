@@ -1094,15 +1094,89 @@ const scanMessages = [
 ];
 
 function triggerScan() {
-  // Try to open GitHub Actions manual trigger page
-  // Users can also just run: python scripts/drift_detector.py locally
-  const repoUrl = window.GITHUB_REPO || '';
-  if (repoUrl) {
-    window.open(`https://github.com/${repoUrl}/actions/workflows/drift-detection.yml`, '_blank');
-  } else {
-    // Fall back to showing instructions + run the animation as demo
-    startScan();
-  }
+  const btn = document.getElementById('scanBtn');
+  if (btn.classList.contains('scanning')) return;  // already running
+
+  // Try to call the local serve.py API
+  fetch('/api/scan')
+    .then(r => r.json())
+    .then(data => {
+      if (data.started) {
+        startScanUI();   // show animated progress
+        streamLogs();    // stream real logs from server
+      } else {
+        alert('Scan already running — please wait.');
+      }
+    })
+    .catch(() => {
+      // serve.py not running — fall back to animation only
+      // and remind user to run via terminal
+      console.warn('serve.py not running, showing demo animation');
+      startScan();
+    });
+}
+
+function streamLogs() {
+  const status = document.getElementById('scanStatus');
+  const es = new EventSource('/api/scan/logs');
+
+  es.onmessage = (e) => {
+    const data = JSON.parse(e.data);
+    // Show the last log line in the scan modal
+    if (data.line) {
+      const clean = data.line
+        .replace(/^\d{4}-\d{2}-\d{2}T[\d:]+\s+\[INFO\]\s+/, '')
+        .replace(/^\d{4}-\d{2}-\d{2}T[\d:]+\s+\[WARNING\]\s+/, '⚠️ ')
+        .replace(/^\d{4}-\d{2}-\d{2}T[\d:]+\s+\[ERROR\]\s+/, '🔴 ');
+      if (status) status.textContent = clean;
+    }
+  };
+
+  es.addEventListener('done', async () => {
+    es.close();
+    // Reload report after scan finishes
+    await loadReport();
+    await loadScanHistory();
+    finishScanUI();
+  });
+
+  es.onerror = () => {
+    es.close();
+    finishScanUI();
+  };
+}
+
+function startScanUI() {
+  const btn = document.getElementById('scanBtn');
+  const overlay = document.getElementById('scanOverlay');
+  document.getElementById('scanProgress').style.width = '0%';
+  document.getElementById('scanPct').textContent = '0%';
+  document.getElementById('scanStatus').textContent = 'Connecting to AWS…';
+  overlay.classList.add('active');
+  btn.classList.add('scanning');
+  btn.textContent = 'Scanning…';
+  // Animate the progress bar slowly while real scan runs
+  let pct = 0;
+  const bar = document.getElementById('scanProgress');
+  const pctEl = document.getElementById('scanPct');
+  window._scanProgressTimer = setInterval(() => {
+    if (pct < 90) { pct += (90 - pct) * 0.04; }
+    bar.style.width = pct + '%';
+    pctEl.textContent = Math.round(pct) + '%';
+  }, 300);
+}
+
+function finishScanUI() {
+  clearInterval(window._scanProgressTimer);
+  document.getElementById('scanProgress').style.width = '100%';
+  document.getElementById('scanPct').textContent = '100%';
+  document.getElementById('scanStatus').textContent = 'Scan complete!';
+  setTimeout(() => {
+    document.getElementById('scanOverlay').classList.remove('active');
+    const btn = document.getElementById('scanBtn');
+    btn.classList.remove('scanning');
+    btn.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg> Run Scan Now`;
+  }, 800);
 }
 
 function startScan() {
