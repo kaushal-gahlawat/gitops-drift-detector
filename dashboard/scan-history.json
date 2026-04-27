@@ -1,5 +1,13 @@
 [
   {
+    "scan_id": "4a9cd02d",
+    "timestamp": "2026-04-27T04:58:04.047843+00:00",
+    "aws_region": "ap-south-1",
+    "total_resources_checked": 16,
+    "drifted": 1,
+    "issue_url": "https://github.com/kaushal-gahlawat/gitops-drift-detector/issues/3"
+  },
+  {
     "scan_id": "ba054a4a",
     "timestamp": "2026-04-26T22:35:43.811829+00:00",
     "aws_region": "ap-south-1",
